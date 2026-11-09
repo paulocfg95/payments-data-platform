@@ -1,0 +1,41 @@
+# Shared steps for the CI and docs workflows:
+# install Python dependencies and dbt, load the sample data into raw,
+# and install the dbt packages.
+#
+# The job that uses this action must:
+# - check out the repository first
+# - run a PostgreSQL service and set the WAREHOUSE_* env vars
+# - set PSEUDONYMIZATION_SALT and DBT_BIN
+
+name: Set up dbt with sample data
+description: Install dependencies and dbt, load sample data into raw, run dbt deps.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+        cache: pip
+        cache-dependency-path: |
+          requirements.txt
+          requirements-dbt.txt
+
+    - name: Install pipeline dependencies
+      shell: bash
+      run: pip install -r requirements.txt
+
+    # dbt gets its own virtual environment, like in the Airflow image.
+    - name: Install dbt
+      shell: bash
+      run: |
+        python -m venv .dbt-venv
+        .dbt-venv/bin/pip install -r requirements-dbt.txt
+
+    - name: Load sample data into raw
+      shell: bash
+      run: python -m src.load.sample_data
+
+    - name: dbt deps
+      shell: bash
+      run: bash dbt/run_dbt.sh deps

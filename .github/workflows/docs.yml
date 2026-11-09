@@ -1,0 +1,89 @@
+# Publish the dbt docs (data catalog and lineage) to GitHub Pages.
+# Runs on every push to main (a release) and can be started by hand.
+#
+# The docs are built from the sample data in a temporary PostgreSQL.
+# The pseudonymization salt is never in the compiled SQL, so the
+# published site does not expose it.
+
+name: dbt docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Only one deployment at a time; do not cancel a deployment in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  WAREHOUSE_HOST: localhost
+  WAREHOUSE_PORT: "5432"
+  WAREHOUSE_USER: warehouse
+  WAREHOUSE_PASSWORD: ci_only_password
+  WAREHOUSE_DB: warehouse
+
+jobs:
+  build:
+    name: Build dbt docs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: warehouse
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: warehouse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U warehouse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Test value for fake data in a throwaway database. Not a secret.
+      PSEUDONYMIZATION_SALT: ci_only_salt_for_fake_data
+      DBT_BIN: ${{ github.workspace }}/.dbt-venv/bin/dbt
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-dbt-sample
+
+      # The tables must exist so the catalog has column types.
+      - name: dbt build
+        run: bash dbt/run_dbt.sh build
+
+      # --static creates one self-contained HTML file.
+      - name: dbt docs generate
+        run: bash dbt/run_dbt.sh docs generate --static
+
+      - name: Prepare site
+        run: |
+          mkdir site
+          cp dbt/target/static_index.html site/index.html
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
