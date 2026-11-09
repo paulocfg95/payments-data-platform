@@ -12,6 +12,11 @@ clean-targets: ["target", "dbt_packages"]
 
 models:
   payments:
+    # Also save the table and column descriptions as PostgreSQL comments,
+    # so the catalog is visible in any SQL tool, not only in dbt docs.
+    +persist_docs:
+      relation: true
+      columns: true
     staging:
       # Silver layer. Tables (not views): the pseudonymized values are
       # computed once, at build time, so readers never need the salt.
