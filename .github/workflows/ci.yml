@@ -1,7 +1,7 @@
 # CI: runs on every pull request and push to develop and main.
 #
 #   lint ──┬──> tests  (pytest, with a PostgreSQL service for integration tests)
-#          └──> dbt    (sample data + dbt build: models and data tests)
+#          └──> dbt    (sample data + dbt build: models and data tests + docs check)
 #
 # The PostgreSQL databases are temporary and only exist during the job.
 # All values below are for these throwaway databases, not real secrets.
@@ -118,28 +118,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dbt.txt
-
-      - name: Install pipeline dependencies
-        run: pip install -r requirements.txt
-
-      # dbt gets its own virtual environment, like in the Airflow image.
-      - name: Install dbt
-        run: |
-          python -m venv .dbt-venv
-          .dbt-venv/bin/pip install -r requirements-dbt.txt
-
-      - name: Load sample data into raw
-        run: python -m src.load.sample_data
-
-      - name: dbt deps
-        run: bash dbt/run_dbt.sh deps
+      # Shared with the docs workflow: dependencies, dbt, sample data, dbt deps.
+      - uses: ./.github/actions/setup-dbt-sample
 
       - name: dbt build
         run: bash dbt/run_dbt.sh build
+
+      # Check that the docs can be generated, so a broken catalog is found
+      # in the pull request, not after the release.
+      - name: dbt docs generate
+        run: bash dbt/run_dbt.sh docs generate --static
