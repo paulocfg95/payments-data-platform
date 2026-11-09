@@ -1,0 +1,4 @@
+# dbt runs in its own virtual environment (inside the Airflow image and in CI),
+# so its dependencies never conflict with Airflow's.
+dbt-core==1.11.16
+dbt-postgres==1.11.0
