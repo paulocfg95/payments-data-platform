@@ -3,3 +3,4 @@ pytest==9.1.1
 responses==0.26.3
 moto[s3]==5.2.4
 ruff==0.17.2
+sqlfluff==4.4.0

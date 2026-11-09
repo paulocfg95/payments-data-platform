@@ -26,9 +26,10 @@ valid as (
 
     select *
     from deduplicated
-    where row_num = 1
-      and customer_cpf is not null
-      and amount is not null
+    where
+        row_num = 1
+        and customer_cpf is not null
+        and amount is not null
 
 )
 

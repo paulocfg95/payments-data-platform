@@ -6,9 +6,10 @@ with raw_valid as (
 
     select count(distinct transaction_id) as row_count
     from {{ source('raw', 'transactions') }}
-    where transaction_id is not null
-      and customer_cpf is not null
-      and amount is not null
+    where
+        transaction_id is not null
+        and customer_cpf is not null
+        and amount is not null
 
 ),
 

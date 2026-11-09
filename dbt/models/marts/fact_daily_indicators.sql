@@ -3,7 +3,7 @@
 --
 -- Incremental: finds the days with new data in silver and rebuilds those
 -- days from all series, so a day is complete even when the series arrive
--- in different runs.
+-- in different runs. On the first run, every day is built.
 
 {{
     config(
@@ -17,24 +17,29 @@ with indicators as (
 
     select * from {{ ref('stg_bcb__indicators') }}
 
-){% if is_incremental() %},
+),
 
 changed_days as (
 
-    select distinct indicator_date
+    select distinct indicators.indicator_date
     from indicators
-    where loaded_at > (select coalesce(max(loaded_at), '1900-01-01') from {{ this }})
+    {% if is_incremental() %}
+        where indicators.loaded_at > (
+            select coalesce(max(previous.loaded_at), '1900-01-01')
+            from {{ this }} as previous
+        )
+    {% endif %}
 
-){% endif %}
+)
 
 select
-    to_char(indicator_date, 'YYYYMMDD')::int as date_sk,
-    max(value) filter (where series_name = 'selic') as selic_rate,
-    max(value) filter (where series_name = 'cdi') as cdi_rate,
-    max(value) filter (where series_name = 'usd_brl_ptax') as usd_brl_ptax,
-    max(loaded_at) as loaded_at
+    to_char(indicators.indicator_date, 'YYYYMMDD')::int as date_sk,
+    max(indicators.value) filter (where indicators.series_name = 'selic') as selic_rate,
+    max(indicators.value) filter (where indicators.series_name = 'cdi') as cdi_rate,
+    max(indicators.value) filter (
+        where indicators.series_name = 'usd_brl_ptax'
+    ) as usd_brl_ptax,
+    max(indicators.loaded_at) as loaded_at
 from indicators
-{% if is_incremental() %}
-where indicator_date in (select indicator_date from changed_days)
-{% endif %}
-group by indicator_date
+where indicators.indicator_date in (select changed_days.indicator_date from changed_days)
+group by indicators.indicator_date

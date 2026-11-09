@@ -1,0 +1,145 @@
+# CI: runs on every pull request and push to develop and main.
+#
+#   lint ──┬──> tests  (pytest, with a PostgreSQL service for integration tests)
+#          └──> dbt    (sample data + dbt build: models and data tests)
+#
+# The PostgreSQL databases are temporary and only exist during the job.
+# All values below are for these throwaway databases, not real secrets.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+# A new push to the same branch cancels the CI run that is still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  WAREHOUSE_HOST: localhost
+  WAREHOUSE_PORT: "5432"
+  WAREHOUSE_USER: warehouse
+  WAREHOUSE_PASSWORD: ci_only_password
+  WAREHOUSE_DB: warehouse
+
+jobs:
+  lint:
+    name: Lint (ruff + sqlfluff)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install lint tools
+        run: pip install $(grep -E "^(ruff|sqlfluff)==" requirements-dev.txt)
+
+      - name: Python lint
+        run: ruff check .
+
+      - name: Python format
+        run: ruff format --check .
+
+      - name: SQL lint
+        run: sqlfluff lint dbt/models dbt/tests
+
+  tests:
+    name: Tests (pytest)
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: warehouse
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: warehouse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U warehouse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # -rs prints the reason of any skipped test. Integration tests must run
+      # here, so a skip would show up in the log.
+      - name: Run pytest
+        run: pytest -v -rs
+
+  dbt:
+    name: dbt build (models + data tests)
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: warehouse
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: warehouse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U warehouse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Test value for fake data in a throwaway database. Not a secret.
+      PSEUDONYMIZATION_SALT: ci_only_salt_for_fake_data
+      DBT_BIN: ${{ github.workspace }}/.dbt-venv/bin/dbt
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dbt.txt
+
+      - name: Install pipeline dependencies
+        run: pip install -r requirements.txt
+
+      # dbt gets its own virtual environment, like in the Airflow image.
+      - name: Install dbt
+        run: |
+          python -m venv .dbt-venv
+          .dbt-venv/bin/pip install -r requirements-dbt.txt
+
+      - name: Load sample data into raw
+        run: python -m src.load.sample_data
+
+      - name: dbt deps
+        run: bash dbt/run_dbt.sh deps
+
+      - name: dbt build
+        run: bash dbt/run_dbt.sh build
