@@ -201,3 +201,4 @@ Em inglês, com um resumo de duas ou três frases em português no topo. Deve te
 
 - As imagens oficiais do MinIO não estão mais no Docker Hub nem no quay.io. Usamos `chainguard/minio` e `chainguard/minio-client`, fixadas por digest sha256. Essas imagens não têm shell.
 - Airflow 3.3.2 (`apache/airflow:3.3.2-python3.12`). As dependências seguem o arquivo de constraints dessa versão.
+- Gerador sintético: datas e escolhas usam `random.Random` com semente própria, não as funções de data do Faker, que consomem aleatoriedade de forma diferente entre plataformas (Windows/Python 3.14 x container Linux/Python 3.12). O teste golden em `tests/test_generator.py` protege isso.

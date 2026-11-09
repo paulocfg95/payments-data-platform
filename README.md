@@ -9,13 +9,15 @@ Banco Central do Brasil, stores the raw data in an object storage (bronze layer)
 into a PostgreSQL warehouse and model it with dbt as a star schema. Everything runs locally with
 `docker compose up`.
 
-**Status:** Phase 1 done (infrastructure + BCB ingestion to bronze). See [Roadmap](#roadmap).
+**Status:** Phase 1 done (infrastructure + BCB ingestion to bronze). Phase 2 in progress:
+synthetic transaction generator done. See [Roadmap](#roadmap).
 
 ## Architecture
 
 ```
-Banco Central SGS API ──> Airflow (ingest_bcb) ──> bronze (MinIO / S3)
-                                                     bronze/bcb_sgs/dt=YYYY-MM-DD/<series>.json
+Banco Central SGS API ──> Airflow (ingest_bcb) ────────────┐
+                                                            ├─> bronze (MinIO / S3)
+Faker generator ───────> Airflow (generate_transactions) ───┘   bronze/<source>/dt=YYYY-MM-DD/<file>.json
                                                          │
                                       (phase 2)          v
                                           PostgreSQL raw ─> dbt staging (silver) ─> dbt marts (gold)
@@ -44,6 +46,16 @@ Banco Central do Brasil, SGS time series API (real public data):
 | `usd_brl_ptax` | 1 | USD/BRL exchange rate (sell), daily |
 
 URL: `https://api.bcb.gov.br/dados/serie/bcdata.sgs.{code}/dados?formato=json&dataInicial=dd/MM/yyyy&dataFinal=dd/MM/yyyy`
+
+Synthetic payments (fake data, generated with Faker `pt_BR`):
+
+| File | Content |
+|---|---|
+| `bronze/customers/dt=YYYY-MM-DD/customers.json` | Fixed registry of 500 customers (`cpf`, `name`, `email`, `state`, `city`, `created_at`, `segment`) |
+| `bronze/transactions/dt=YYYY-MM-DD/transactions.json` | 800 to 1,500 transactions per day (`transaction_id`, `customer_cpf`, `transaction_at`, `payment_type`, `channel`, `amount`, `fee`, `status`) |
+
+About 1% of the transactions are duplicated and about 0.5% have a null `customer_cpf` or
+`amount`, on purpose. The silver layer cleans them and the data tests check the result.
 
 ## Dimensional model
 
@@ -98,6 +110,9 @@ pytest
 - **Idempotency.** The day to process comes from the Airflow data interval, never from the clock.
   Each run writes to a fixed key (`dt=<day>/<series>.json`), so a re-run replaces the file.
   No duplicates.
+- **Deterministic generator.** The random seed is the processing date (`20261105`), so the
+  same day always produces the same transactions. A golden test checks that the output is
+  identical on every machine (laptop, Airflow container, CI).
 - **Empty days.** On weekends and holidays the API returns HTTP 404. The client treats this as
   "no data" and writes an empty list, so we can see the day was processed.
 - **Failure handling.** HTTP timeouts, retries with exponential backoff on network errors,
@@ -110,7 +125,7 @@ pytest
 
 ## Synthetic data notice
 
-Customer and transaction data (phase 2) will be **fictional**, generated with Faker.
+Customer and transaction data are **fictional**, generated with Faker.
 No real personal data is used. BCB indicators are real public data.
 
 ## Roadmap
@@ -126,6 +141,7 @@ No real personal data is used. BCB indicators are real public data.
 ```
 airflow/dags/        Airflow DAGs
 src/extract/         BCB API client and ingestion job
+src/generate/        Synthetic customer and transaction generator
 src/load/            Bronze writer (S3 / MinIO)
 tests/               pytest
 docker/airflow/      Airflow image
