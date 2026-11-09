@@ -1,0 +1,143 @@
+# Local environment for payments-data-platform.
+# Start everything with: docker compose up -d
+# All secrets come from the .env file (see .env.example).
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+  image: payments-data-platform/airflow:3.3.2
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/${AIRFLOW_DB_NAME}
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: America/Sao_Paulo
+    # Local development only: every user is admin, no login page.
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+    # Our code lives in /opt/airflow/src, so "import src..." works.
+    PYTHONPATH: /opt/airflow
+    # Bronze layer storage (MinIO locally, S3 when S3_ENDPOINT_URL is empty).
+    BRONZE_BUCKET: ${BRONZE_BUCKET}
+    S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-${MINIO_ROOT_USER}}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD}}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - airflow-logs:/opt/airflow/logs
+  depends_on: &airflow-common-depends-on
+    airflow-db:
+      condition: service_healthy
+
+services:
+  # ---------- Databases ----------
+  airflow-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${AIRFLOW_DB_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME}
+    volumes:
+      - airflow-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AIRFLOW_DB_USER} -d ${AIRFLOW_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  warehouse:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${WAREHOUSE_USER}
+      POSTGRES_PASSWORD: ${WAREHOUSE_PASSWORD}
+      POSTGRES_DB: ${WAREHOUSE_DB}
+    ports:
+      - "${WAREHOUSE_PORT:-5433}:5432"
+    volumes:
+      - warehouse-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${WAREHOUSE_USER} -d ${WAREHOUSE_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------- Object storage (bronze layer) ----------
+  # Official MinIO images are no longer published, so we use the
+  # Chainguard build, pinned by digest for reproducible runs.
+  minio:
+    image: chainguard/minio@sha256:a1ac4589a5f8136b616e667b48a0bea9719bb10bd45799ea946f24bbedfafde4
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  # One-shot job: create the bucket. Restarts until MinIO is ready.
+  minio-init:
+    image: chainguard/minio-client@sha256:10388d580a724f356b94c9b2631b5a179039cabe8c76e9b37d86ed007d569b05
+    environment:
+      MC_HOST_local: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000
+    command: ["mb", "--ignore-existing", "local/${BRONZE_BUCKET}"]
+    depends_on:
+      - minio
+    restart: on-failure
+
+  # ---------- Airflow ----------
+  airflow-init:
+    <<: *airflow-common
+    command: ["db", "migrate"]
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: ["api-server"]
+    ports:
+      - "${AIRFLOW_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: ["scheduler"]
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: ["dag-processor"]
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  airflow-db-data:
+  warehouse-data:
+  minio-data:
+  airflow-logs:
