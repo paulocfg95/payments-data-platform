@@ -1,11 +1,15 @@
 # payments-data-platform
 
-[![CI](https://github.com/paulocfg95/payments-data-platform/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/paulocfg95/payments-data-platform/actions/workflows/ci.yml)
+[![CI](https://github.com/paulocfg95/payments-data-platform/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/paulocfg95/payments-data-platform/actions/workflows/ci.yml)
 [![dbt docs](https://img.shields.io/badge/dbt%20docs-data%20catalog-FF694B)](https://paulocfg95.github.io/payments-data-platform/)
+![Python](https://img.shields.io/badge/python-3.12-3776AB)
+![Airflow](https://img.shields.io/badge/airflow-3.3-017CEE)
+![dbt](https://img.shields.io/badge/dbt-1.11-FF694B)
+![PostgreSQL](https://img.shields.io/badge/postgresql-16-4169E1)
 
 **Data catalog and lineage (dbt docs):** https://paulocfg95.github.io/payments-data-platform/
 
-> **Resumo (PT-BR):** Plataforma de dados de pagamentos para portfólio. Coleta indicadores reais do Banco Central (Selic, CDI e dólar PTAX) e gera transações sintéticas. Os dados passam por um data lake (bronze), um PostgreSQL (raw) e modelos dbt em star schema (silver e gold), com orquestração no Airflow, pseudonimização de dados pessoais (LGPD) e testes automatizados.
+> **Resumo (PT-BR):** Plataforma de dados de pagamentos para portfólio. Coleta indicadores reais do Banco Central (Selic, CDI e dólar PTAX) e gera transações sintéticas. Os dados passam por um data lake (bronze), um PostgreSQL (raw) e modelos dbt em star schema (silver e gold), com orquestração no Airflow, pseudonimização de dados pessoais (LGPD), testes automatizados com CI no GitHub Actions e catálogo de dados publicado.
 
 ## What this project does
 
@@ -14,21 +18,22 @@ the Banco Central do Brasil and generates fake payment transactions, stores the 
 object storage (bronze), loads it into a PostgreSQL warehouse (raw), and models it with dbt as a
 star schema (silver and gold). Everything runs locally with `docker compose up`.
 
-**Status:** Phase 1 and phase 2 done. Phase 3 in progress: CI and data catalog done.
+**Status:** v1.0. Phases 1, 2 and 3 done (pipeline, star schema, CI and data catalog).
 See [Roadmap](#roadmap).
 
 ## Architecture
 
-```
-Banco Central SGS API ──> ingest_bcb ────────────┐
-                                                  ├─> bronze (MinIO / S3) ─> raw (PostgreSQL)
-Faker generator ───────> generate_transactions ───┘   JSON files by day       text tables by day
-                                                                                    │
-                                                                                    │ Airflow Assets
-                                                                                    v
-                                     transform_dbt:  staging (silver) ─> marts (gold, star schema)
-                                                     clean, typed,        dimensions, facts,
-                                                     pseudonymized        daily summary
+```mermaid
+flowchart LR
+    bcb["Banco Central SGS API<br/>real public data"] --> ingest["ingest_bcb<br/>Airflow DAG"]
+    faker["Faker generator<br/>fake data"] --> gen["generate_transactions<br/>Airflow DAG"]
+    ingest --> bronze[("bronze<br/>MinIO / S3<br/>JSON by day")]
+    gen --> bronze
+    bronze --> raw[("raw<br/>PostgreSQL<br/>text tables by day")]
+    raw -- "Airflow Assets" --> dbt["transform_dbt<br/>Airflow DAG"]
+    dbt --> silver[("silver<br/>dbt staging<br/>clean, typed, pseudonymized")]
+    silver --> gold[("gold<br/>dbt marts<br/>star schema")]
+    gold --> docs["dbt docs<br/>GitHub Pages"]
 ```
 
 | Layer | Where | What |
@@ -43,6 +48,42 @@ row count**. When the check passes, the DAG marks an Airflow Asset (`raw_bcb_sgs
 `raw_customers`, `raw_transactions`) as updated. `transform_dbt` runs when all three assets
 were updated, so dbt runs when new data arrives, not at a fixed time.
 
+## See it running
+
+**Airflow: the three DAGs**, with their schedules and recent runs. `transform_dbt` has no
+clock schedule: it waits for the raw assets ("1 of 3 assets updated").
+
+![Airflow DAGs](docs/images/airflow-dags.png)
+
+**Data-aware scheduling:** the two ingestion DAGs produce the raw assets, and the assets
+trigger `transform_dbt`.
+
+![Airflow assets](docs/images/airflow-assets.png)
+
+**`ingest_bcb` run:** one mapped task per BCB series (`[3]`), then load into raw and check the
+row counts against bronze.
+
+![ingest_bcb graph](docs/images/airflow-ingest-graph.png)
+
+**Bronze layer in MinIO:** one partition per day (`dt=YYYY-MM-DD`). A re-run replaces the
+files of that day.
+
+![MinIO bronze](docs/images/minio-bronze.png)
+
+**dbt lineage** (from the [data catalog](https://paulocfg95.github.io/payments-data-platform/)):
+raw sources → silver (`stg_*`) → dimensions and facts → daily summary, plus the custom tests.
+
+![dbt lineage](docs/images/dbt-lineage.png)
+
+**Gold layer query:** daily summary by payment type for one day. Pix has the most transactions,
+but credit card has the largest approved amount.
+
+![Gold query](docs/images/gold-query.png)
+
+**CI on a pull request:** lint, tests and dbt build must pass before the merge.
+
+![CI checks](docs/images/ci-checks.png)
+
 ## Tech stack
 
 | Tool | Why |
@@ -54,7 +95,9 @@ were updated, so dbt runs when new data arrives, not at a fixed time.
 | dbt 1.11 + dbt_utils | SQL transformations, data tests, documentation and lineage |
 | Faker | Fake customers and transactions (`pt_BR` locale) |
 | pytest, responses, moto | Unit and integration tests without network or real cloud |
-| ruff | Python lint and format |
+| ruff, sqlfluff | Python and SQL lint and format |
+| GitHub Actions | CI on every pull request; publishes the dbt docs |
+| GitHub Pages | Hosts the public data catalog |
 | Docker Compose | One command to start everything |
 
 ## Data sources
@@ -81,15 +124,17 @@ About 1% of the transactions are duplicated and about 0.5% have a null `customer
 
 ## Dimensional model (gold)
 
+```mermaid
+erDiagram
+    dim_customer ||--o{ fact_transactions : customer_sk
+    dim_date ||--o{ fact_transactions : date_sk
+    dim_payment_type ||--o{ fact_transactions : payment_type_sk
+    dim_channel ||--o{ fact_transactions : channel_sk
+    dim_date ||--o{ fact_daily_indicators : date_sk
 ```
-                 dim_date
-                    │
- dim_customer ── fact_transactions ── dim_payment_type
-                    │
-                dim_channel
 
- dim_date ── fact_daily_indicators        agg_daily_payments (summary for dashboards)
-```
+`agg_daily_payments` is a summary table built from `fact_transactions` and
+`fact_daily_indicators`, ready for dashboards.
 
 | Model | Grain | Notes |
 |---|---|---|
@@ -270,11 +315,18 @@ BCB indicators are real public data.
 - **Phase 1 (done):** Docker Compose (Airflow, PostgreSQL, MinIO), BCB ingestion DAG, API client tests.
 - **Phase 2 (done):** synthetic transaction generator, bronze → raw load, dbt staging and star
   schema, data tests, pseudonymization of CPF and email (LGPD).
-- **Phase 3 (in progress):** GitHub Actions CI (done), `dbt docs` catalog and lineage on
-  GitHub Pages (done), diagram and screenshots.
-- **Later:** bronze on Amazon S3. The code already uses boto3 (S3 API); switching from MinIO is
-  a configuration change.
-- **Ideas:** SCD type 2 for customers, holidays in `dim_date`, Spark, Databricks.
+- **Phase 3 (done):** GitHub Actions CI (ruff, sqlfluff, pytest, `dbt build`), `dbt docs`
+  catalog and lineage on GitHub Pages, diagrams and screenshots.
+
+Possible next steps:
+
+- **Bronze on Amazon S3.** The code already uses boto3 (S3 API); switching from MinIO is a
+  configuration change, plus an IAM policy that only allows access to the bucket.
+- **SCD type 2 for customers** (`valid_from`, `valid_to`, `is_current`) to keep the history of
+  changes such as a new city or segment.
+- **Holidays in `dim_date`**, from a public holiday calendar.
+- **Data freshness checks** with `dbt source freshness`.
+- **Bigger volumes** with Spark or Databricks, keeping the same bronze, silver and gold layers.
 
 ## Repository layout
 
@@ -291,5 +343,6 @@ tests/               pytest
 .github/workflows/   CI (lint, pytest, dbt build) and dbt docs to GitHub Pages
 .github/actions/     Shared CI steps (dbt + sample data)
 docker/airflow/      Airflow image (with dbt in its own virtual environment)
+docs/images/         Screenshots used in this README
 docker-compose.yml
 ```
