@@ -1,5 +1,7 @@
 # payments-data-platform
 
+[![CI](https://github.com/paulocfg95/payments-data-platform/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/paulocfg95/payments-data-platform/actions/workflows/ci.yml)
+
 > **Resumo (PT-BR):** Plataforma de dados de pagamentos para portfólio. Coleta indicadores reais do Banco Central (Selic, CDI e dólar PTAX) e gera transações sintéticas. Os dados passam por um data lake (bronze), um PostgreSQL (raw) e modelos dbt em star schema (silver e gold), com orquestração no Airflow, pseudonimização de dados pessoais (LGPD) e testes automatizados.
 
 ## What this project does
@@ -9,7 +11,8 @@ the Banco Central do Brasil and generates fake payment transactions, stores the 
 object storage (bronze), loads it into a PostgreSQL warehouse (raw), and models it with dbt as a
 star schema (silver and gold). Everything runs locally with `docker compose up`.
 
-**Status:** Phase 1 and phase 2 done. Next: CI/CD and data catalog. See [Roadmap](#roadmap).
+**Status:** Phase 1 and phase 2 done. Phase 3 in progress: CI done; next is the data catalog.
+See [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -169,12 +172,34 @@ python -m venv .venv
 .venv/Scripts/activate        # Windows (Linux/macOS: source .venv/bin/activate)
 pip install -r requirements-dev.txt
 ruff check .
+ruff format --check .
+sqlfluff lint dbt/models dbt/tests
 pytest
 ```
 
 Tests marked `integration` use the warehouse from Docker Compose (schema `raw_test`, dropped
 after each test). If the warehouse is not running, they are skipped. To run only unit tests:
 `pytest -m "not integration"`.
+
+## CI (GitHub Actions)
+
+Every pull request and push to `develop` and `main` runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+
+```
+lint ──┬──> tests  pytest, with a temporary PostgreSQL, so integration tests run too
+       └──> dbt    sample data into raw, then dbt build (models + data tests)
+```
+
+| Job | What it checks |
+|---|---|
+| `lint` | `ruff check`, `ruff format --check` and `sqlfluff lint` (SQL style of the dbt models) |
+| `tests` | All pytest tests, including integration tests against PostgreSQL |
+| `dbt` | `python -m src.load.sample_data` loads 3 days of sample data, then `dbt build` runs every model and data test |
+
+The `dbt` job does not call the BCB API: it uses a small sample of real BCB values saved in the
+repository ([`src/load/sample/bcb_sample.json`](src/load/sample/bcb_sample.json)), so CI never fails
+because an external service is down. The transactions come from the same deterministic
+generator as the real pipeline. Branch protection rules block the merge if any job fails.
 
 ## Technical decisions
 
@@ -205,6 +230,8 @@ after each test). If the warehouse is not running, they are skipped. To run only
 - **Failure handling.** HTTP timeouts, retries with exponential backoff on network errors,
   HTTP 429 and 5xx, response schema validation, and logs. Airflow also retries the tasks.
 - **Testable code.** DAGs are thin. The logic lives in `src/` and is tested with pytest.
+- **CI on every pull request.** Lint (Python and SQL), pytest and `dbt build` must pass before
+  a merge. Python code, SQL and data are all tested automatically.
 - **No secrets in the repo.** All credentials come from `.env` (ignored by git).
 - **MinIO image.** The official MinIO images are no longer published, so the project uses
   the Chainguard build, pinned by sha256 digest.
@@ -220,8 +247,10 @@ BCB indicators are real public data.
 - **Phase 1 (done):** Docker Compose (Airflow, PostgreSQL, MinIO), BCB ingestion DAG, API client tests.
 - **Phase 2 (done):** synthetic transaction generator, bronze → raw load, dbt staging and star
   schema, data tests, pseudonymization of CPF and email (LGPD).
-- **Phase 3:** GitHub Actions CI (ruff, pytest, `dbt build`), optional Amazon S3 bronze,
-  `dbt docs` catalog and lineage, diagram and screenshots.
+- **Phase 3 (in progress):** GitHub Actions CI (done), `dbt docs` catalog and lineage on
+  GitHub Pages, diagram and screenshots.
+- **Later:** bronze on Amazon S3. The code already uses boto3 (S3 API); switching from MinIO is
+  a configuration change.
 - **Ideas:** SCD type 2 for customers, holidays in `dim_date`, Spark, Databricks.
 
 ## Repository layout
@@ -236,6 +265,7 @@ dbt/models/marts/    Gold layer (star schema)
 dbt/seeds/           Reference data (payment types, channels)
 dbt/tests/           Custom dbt tests
 tests/               pytest
+.github/workflows/   CI (lint, pytest, dbt build)
 docker/airflow/      Airflow image (with dbt in its own virtual environment)
 docker-compose.yml
 ```
