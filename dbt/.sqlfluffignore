@@ -1,0 +1,5 @@
+# Generic tests use the dbt-only {% test %} block, which plain Jinja cannot render.
+tests/generic/
+# Installed packages and build output.
+dbt_packages/
+target/

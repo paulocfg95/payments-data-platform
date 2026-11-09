@@ -1,0 +1,37 @@
+[sqlfluff]
+dialect = postgres
+# The jinja templater renders dbt code without a database connection.
+templater = jinja
+max_line_length = 100
+# RF04: the star schema uses column names like date, day, year and value on
+#       purpose (they are the names in the model design).
+# ST06: column order follows the model design (keys first), not "simple
+#       columns before calculations".
+exclude_rules = RF04, ST06
+
+[sqlfluff:templater:jinja]
+# ref(), source(), config(), is_incremental(), env_var() ...
+apply_dbt_builtins = True
+# Our own macros (pseudonymize, generate_schema_name).
+load_macros_from_path = dbt/macros
+# Lint-only stand-ins for the dbt_utils package macros.
+library_path = dbt/sqlfluff_libs
+
+[sqlfluff:indentation]
+indented_joins = False
+indented_using_on = True
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.identifiers]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.literals]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = lower
