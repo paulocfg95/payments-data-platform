@@ -1,8 +1,11 @@
-"""Daily ingestion of Banco Central (SGS) indicators into the bronze layer.
+"""Daily ingestion of Banco Central (SGS) indicators: API -> bronze -> raw.
 
-One mapped task per series (selic, cdi, usd_brl_ptax). Each task fetches
-the values for the run's data interval day and writes:
-    bronze/bcb_sgs/dt=YYYY-MM-DD/<series>.json
+One mapped task per series (selic, cdi, usd_brl_ptax):
+1. ingest: fetch the values of the run's day and write
+   bronze/bcb_sgs/dt=YYYY-MM-DD/<series>.json
+2. load_raw: replace that day and series in raw.bcb_sgs
+3. check_counts: bronze and raw must have the same row count.
+   On success, the raw_bcb_sgs asset is marked as updated.
 
 The day comes from the Airflow data interval, never from the wall clock,
 so re-runs and backfills always process the same day and overwrite the
@@ -17,6 +20,8 @@ import pendulum
 from airflow.sdk import dag, get_current_context, task
 from airflow.timetables.interval import CronDataIntervalTimetable
 
+from pipeline_assets import RAW_BCB_SGS
+from raw_tasks import check_counts, create_raw_tables, load_raw
 from src.extract.bcb_client import SERIES
 
 LOCAL_TZ = pendulum.timezone("America/Sao_Paulo")
@@ -32,14 +37,14 @@ default_args = {
 
 @dag(
     dag_id="ingest_bcb",
-    description="Fetch BCB SGS daily indicators and save raw JSON to bronze",
+    description="Fetch BCB SGS daily indicators, save to bronze and load into raw",
     # Runs every day at 10:00 (Sao Paulo) for the previous day.
     schedule=CronDataIntervalTimetable("0 10 * * *", timezone=LOCAL_TZ),
     start_date=pendulum.datetime(2026, 10, 1, tz=LOCAL_TZ),
     catchup=False,
     max_active_runs=1,
     default_args=default_args,
-    tags=["bronze", "bcb"],
+    tags=["bronze", "raw", "bcb"],
 )
 def ingest_bcb():
     @task
@@ -62,7 +67,10 @@ def ingest_bcb():
             bucket=config.bucket,
         )
 
-    ingest.expand(series_name=sorted(SERIES))
+    keys = ingest.expand(series_name=sorted(SERIES))
+    loaded = load_raw.expand(key=keys)
+    create_raw_tables() >> loaded
+    check_counts.override(outlets=[RAW_BCB_SGS]).expand(key=loaded)
 
 
 ingest_bcb()

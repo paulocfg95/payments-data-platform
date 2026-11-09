@@ -1,0 +1,134 @@
+version: 2
+
+models:
+  - name: stg_bcb__indicators
+    description: >
+      Silver layer. BCB SGS indicators with proper types (real public data).
+      Grain: one row per series per day.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [series_name, indicator_date]
+    columns:
+      - name: series_name
+        description: Series name.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [selic, cdi, usd_brl_ptax]
+      - name: indicator_date
+        description: Date of the value.
+        tests:
+          - not_null
+      - name: value
+        description: >
+          Value of the series. selic and cdi are rates in % per day;
+          usd_brl_ptax is the price of 1 USD in BRL.
+        tests:
+          - not_null
+          - positive_value
+      - name: loaded_at
+        description: When the source row was loaded into raw.
+
+  - name: stg_customers
+    description: >
+      Silver layer. Latest snapshot of the SYNTHETIC customer registry (fake data),
+      pseudonymized for LGPD: CPF and email are salted SHA-256 hashes and the name
+      is removed. Grain: one row per customer.
+    columns:
+      - name: customer_hash
+        description: Salted SHA-256 hash of the CPF (digits only). Replaces the CPF.
+        tests:
+          - unique
+          - not_null
+      - name: email_hash
+        description: Salted SHA-256 hash of the email (lower case). Replaces the email.
+        tests:
+          - unique
+          - not_null
+      - name: state
+        description: Brazilian state code (UF), upper case.
+        tests:
+          - not_null
+      - name: city
+        description: City name.
+      - name: created_at
+        description: When the customer was created.
+        tests:
+          - not_null
+      - name: segment
+        description: Customer segment.
+        tests:
+          - accepted_values:
+              arguments:
+                values: [individual, business]
+      - name: snapshot_date
+        description: Day of the registry snapshot used.
+      - name: loaded_at
+        description: When the source row was loaded into raw.
+
+  - name: stg_transactions
+    description: >
+      Silver layer. SYNTHETIC payment transactions (fake data), cleaned:
+      duplicates removed, rows without customer or amount removed, types set,
+      CPF replaced by a salted hash (LGPD). Grain: one row per transaction.
+    columns:
+      - name: transaction_id
+        description: Transaction identifier (UUID).
+        tests:
+          - unique
+          - not_null
+      - name: customer_hash
+        description: Salted SHA-256 hash of the customer CPF.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_customers')
+                field: customer_hash
+      - name: transaction_at
+        description: Date and time of the transaction (Sao Paulo local time).
+        tests:
+          - not_null
+      - name: transaction_date
+        description: Date of the transaction.
+        tests:
+          - not_null
+      - name: payment_type
+        description: Payment type.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [pix, boleto, credit_card, debit_card]
+      - name: channel
+        description: Channel used to pay.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [app, web, pos]
+      - name: amount
+        description: Transaction amount in BRL.
+        tests:
+          - not_null
+          - positive_value
+      - name: fee
+        description: Fee charged in BRL.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: status
+        description: Transaction status.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [approved, declined, refunded]
+      - name: dt
+        description: Processing day (raw partition).
+      - name: loaded_at
+        description: When the source row was loaded into raw. Used by incremental models.

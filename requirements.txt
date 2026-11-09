@@ -1,4 +1,7 @@
 # Runtime dependencies used by src/ and the DAGs.
-# Versions match the Airflow 3.3.2 constraints file (Python 3.12).
+# requests, boto3 and psycopg2-binary match the Airflow 3.3.2 constraints file (Python 3.12).
+# faker is not in the constraints file, so it is pinned here.
 requests==2.34.2
 boto3==1.43.75
+faker==40.43.0
+psycopg2-binary==2.9.13

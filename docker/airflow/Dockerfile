@@ -11,3 +11,9 @@ RUN pip install --no-cache-dir \
     "apache-airflow==${AIRFLOW_VERSION}" \
     -r /tmp/requirements.txt \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+
+# dbt in a separate virtual environment: dbt and Airflow pin different
+# versions of some libraries, so they should not share one environment.
+COPY requirements-dbt.txt /tmp/requirements-dbt.txt
+RUN python -m venv /home/airflow/dbt-venv \
+    && /home/airflow/dbt-venv/bin/pip install --no-cache-dir -r /tmp/requirements-dbt.txt

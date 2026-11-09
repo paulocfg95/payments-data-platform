@@ -84,3 +84,21 @@ def test_ingest_series_day_writes_empty_day(s3):
 def test_unknown_series_is_rejected(s3):
     with pytest.raises(ValueError):
         ingest_series_day("ipca", date(2026, 11, 5), FakeBCBClient([]), s3, BUCKET)
+
+
+def test_generate_day_to_bronze_writes_both_files(s3):
+    from src.generate.to_bronze import generate_day_to_bronze
+
+    day = date(2026, 11, 5)
+    keys = generate_day_to_bronze(day, s3, BUCKET)
+    first = read_json(s3, BUCKET, keys["transactions"])
+
+    # Re-run: same keys, same content, no extra files.
+    generate_day_to_bronze(day, s3, BUCKET)
+
+    assert keys == {
+        "customers": "bronze/customers/dt=2026-11-05/customers.json",
+        "transactions": "bronze/transactions/dt=2026-11-05/transactions.json",
+    }
+    assert read_json(s3, BUCKET, keys["transactions"]) == first
+    assert s3.list_objects_v2(Bucket=BUCKET)["KeyCount"] == 2
