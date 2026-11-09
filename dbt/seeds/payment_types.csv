@@ -1,0 +1,5 @@
+payment_type,description
+pix,Instant payment system from the Banco Central do Brasil
+boleto,Bank payment slip with barcode
+credit_card,Credit card payment
+debit_card,Debit card payment

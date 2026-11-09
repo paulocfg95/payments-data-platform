@@ -1,0 +1,237 @@
+version: 2
+
+models:
+  - name: dim_customer
+    description: >
+      Customer dimension. SYNTHETIC data (fake customers). Pseudonymized:
+      no CPF, email or name in clear text. Grain: one row per customer.
+    columns:
+      - name: customer_sk
+        description: Surrogate key (hash of customer_hash).
+        tests:
+          - unique
+          - not_null
+      - name: customer_hash
+        description: Salted SHA-256 hash of the CPF. Natural key of the customer.
+        tests:
+          - unique
+          - not_null
+      - name: state
+        description: Brazilian state code (UF).
+      - name: city
+        description: City name.
+      - name: segment
+        description: individual or business.
+        tests:
+          - accepted_values:
+              arguments:
+                values: [individual, business]
+      - name: created_at
+        description: When the customer was created.
+
+  - name: dim_date
+    description: "Calendar dimension from 2024-01-01 to 2027-12-31. Grain: one row per day."
+    columns:
+      - name: date_sk
+        description: Date key as an integer in the format YYYYMMDD.
+        tests:
+          - unique
+          - not_null
+      - name: date
+        description: Calendar date.
+        tests:
+          - unique
+          - not_null
+      - name: day
+        description: Day of the month (1-31).
+      - name: month
+        description: Month (1-12).
+      - name: year
+        description: Year.
+      - name: quarter
+        description: Quarter of the year (1-4).
+      - name: day_of_week
+        description: ISO day of the week (1 = Monday, 7 = Sunday).
+      - name: day_name
+        description: Name of the day of the week, in English.
+      - name: is_weekend
+        description: True on Saturday and Sunday.
+
+  - name: dim_payment_type
+    description: "Payment type dimension. Grain: one row per payment type."
+    columns:
+      - name: payment_type_sk
+        description: Surrogate key (hash of payment_type).
+        tests:
+          - unique
+          - not_null
+      - name: payment_type
+        description: Payment type code.
+        tests:
+          - unique
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [pix, boleto, credit_card, debit_card]
+      - name: description
+        description: What the payment type means.
+
+  - name: dim_channel
+    description: "Channel dimension. Grain: one row per channel."
+    columns:
+      - name: channel_sk
+        description: Surrogate key (hash of channel).
+        tests:
+          - unique
+          - not_null
+      - name: channel
+        description: Channel code.
+        tests:
+          - unique
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [app, web, pos]
+      - name: description
+        description: What the channel means.
+
+  - name: fact_transactions
+    description: >
+      Transaction fact table. SYNTHETIC data (fake transactions).
+      Grain: one row per transaction. Incremental model (unique key: transaction_id).
+    columns:
+      - name: transaction_id
+        description: Transaction identifier (UUID). Natural key of the fact.
+        tests:
+          - unique
+          - not_null
+      - name: customer_sk
+        description: Key to dim_customer.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customer')
+                field: customer_sk
+      - name: date_sk
+        description: Key to dim_date (day of the transaction).
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_sk
+      - name: payment_type_sk
+        description: Key to dim_payment_type.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_payment_type')
+                field: payment_type_sk
+      - name: channel_sk
+        description: Key to dim_channel.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_channel')
+                field: channel_sk
+      - name: transaction_at
+        description: Date and time of the transaction (Sao Paulo local time).
+      - name: amount
+        description: Transaction amount in BRL.
+        tests:
+          - not_null
+          - positive_value
+      - name: fee
+        description: Fee charged in BRL.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: status
+        description: Transaction status.
+        tests:
+          - accepted_values:
+              arguments:
+                values: [approved, declined, refunded]
+      - name: is_approved
+        description: True when status is approved.
+        tests:
+          - not_null
+      - name: loaded_at
+        description: When the source row was loaded into raw. Controls incremental loads.
+
+  - name: fact_daily_indicators
+    description: >
+      Daily Banco Central indicators (real public data), one column per series.
+      Grain: one row per business day. Incremental model (unique key: date_sk).
+    columns:
+      - name: date_sk
+        description: Key to dim_date.
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_sk
+      - name: selic_rate
+        description: Selic rate, % per day (SGS series 11).
+        tests:
+          - positive_value
+      - name: cdi_rate
+        description: CDI rate, % per day (SGS series 12).
+        tests:
+          - positive_value
+      - name: usd_brl_ptax
+        description: USD/BRL exchange rate, sell price (SGS series 1).
+        tests:
+          - positive_value
+      - name: loaded_at
+        description: Latest load time of the indicators of the day.
+
+  - name: agg_daily_payments
+    description: >
+      Daily payment summary for dashboards, with the BCB indicators of the day.
+      SYNTHETIC transaction data. Grain: one row per day, payment type and channel.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [date_sk, payment_type, channel]
+    columns:
+      - name: date_sk
+        description: Key to dim_date.
+        tests:
+          - not_null
+      - name: date
+        description: Calendar date.
+      - name: payment_type
+        description: Payment type code.
+      - name: channel
+        description: Channel code.
+      - name: transaction_count
+        description: Number of transactions (all statuses).
+        tests:
+          - positive_value
+      - name: approved_count
+        description: Number of approved transactions.
+      - name: approval_rate
+        description: approved_count / transaction_count (0 to 1).
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: approved_amount
+        description: Total amount of approved transactions in BRL.
+      - name: fee_revenue
+        description: Total fee of approved transactions in BRL.
+      - name: selic_rate
+        description: Selic rate of the day, % per day. Null on weekends and holidays.
+      - name: cdi_rate
+        description: CDI rate of the day, % per day. Null on weekends and holidays.
+      - name: usd_brl_ptax
+        description: USD/BRL PTAX of the day. Null on weekends and holidays.
