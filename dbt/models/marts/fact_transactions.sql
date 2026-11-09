@@ -19,7 +19,10 @@ with transactions as (
     select *
     from {{ ref('stg_transactions') }}
     {% if is_incremental() %}
-    where loaded_at > (select coalesce(max(loaded_at), '1900-01-01') from {{ this }})
+        where loaded_at > (
+            select coalesce(max(previous.loaded_at), '1900-01-01')
+            from {{ this }} as previous
+        )
     {% endif %}
 
 )

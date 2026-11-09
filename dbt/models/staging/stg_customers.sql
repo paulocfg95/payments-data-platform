@@ -6,7 +6,10 @@ with latest_snapshot as (
 
     select *
     from {{ source('raw', 'customers') }}
-    where dt = (select max(dt) from {{ source('raw', 'customers') }})
+    where dt = (
+        select max(snapshots.dt)
+        from {{ source('raw', 'customers') }} as snapshots
+    )
 
 )
 

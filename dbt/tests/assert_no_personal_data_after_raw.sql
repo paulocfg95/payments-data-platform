@@ -13,5 +13,8 @@ select
     table_name,
     column_name
 from information_schema.columns
-where table_schema in ('{{ generate_schema_name("staging", none) }}', '{{ generate_schema_name("marts", none) }}')
-  and column_name in ('cpf', 'customer_cpf', 'email', 'name', 'customer_name')
+where
+    table_schema in (
+        '{{ generate_schema_name("staging", none) }}', '{{ generate_schema_name("marts", none) }}'
+    )
+    and column_name in ('cpf', 'customer_cpf', 'email', 'name', 'customer_name')
