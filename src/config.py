@@ -25,3 +25,28 @@ class StorageConfig:
             endpoint_url=os.environ.get("S3_ENDPOINT_URL") or None,
             region=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
         )
+
+
+@dataclass(frozen=True)
+class WarehouseConfig:
+    """Connection settings for the PostgreSQL warehouse."""
+
+    host: str
+    port: int
+    user: str
+    password: str
+    dbname: str
+
+    @classmethod
+    def from_env(cls) -> WarehouseConfig:
+        """Read settings from env vars. The password has no default on purpose."""
+        password = os.environ.get("WAREHOUSE_PASSWORD")
+        if not password:
+            raise RuntimeError("WAREHOUSE_PASSWORD is not set. Check your .env file.")
+        return cls(
+            host=os.environ.get("WAREHOUSE_HOST", "localhost"),
+            port=int(os.environ.get("WAREHOUSE_PORT", "5433")),
+            user=os.environ.get("WAREHOUSE_USER", "warehouse"),
+            password=password,
+            dbname=os.environ.get("WAREHOUSE_DB", "warehouse"),
+        )
