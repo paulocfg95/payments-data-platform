@@ -1,0 +1,24 @@
+version: 2
+
+seeds:
+  - name: payment_types
+    description: Reference list of payment types with a short description.
+    columns:
+      - name: payment_type
+        description: Payment type code.
+        tests:
+          - unique
+          - not_null
+      - name: description
+        description: What the payment type means.
+
+  - name: channels
+    description: Reference list of payment channels with a short description.
+    columns:
+      - name: channel
+        description: Channel code.
+        tests:
+          - unique
+          - not_null
+      - name: description
+        description: What the channel means.

@@ -1,0 +1,27 @@
+name: payments
+version: "1.0.0"
+config-version: 2
+profile: payments
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  payments:
+    staging:
+      # Silver layer. Tables (not views): the pseudonymized values are
+      # computed once, at build time, so readers never need the salt.
+      +schema: staging
+      +materialized: table
+    marts:
+      # Gold layer: star schema.
+      +schema: marts
+      +materialized: table
+
+seeds:
+  payments:
+    +schema: reference
