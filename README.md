@@ -80,7 +80,8 @@ but credit card has the largest approved amount.
 
 ![Gold query](docs/images/gold-query.png)
 
-**CI on a pull request:** lint, tests and dbt build must pass before the merge.
+**CI pipeline in GitHub Actions:** lint first, then pytest and `dbt build` in parallel.
+It runs on every pull request and push, and all jobs must pass before a merge.
 
 ![CI checks](docs/images/ci-checks.png)
 
