@@ -1,0 +1,80 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Raw layer: a faithful copy of the bronze files, loaded by Airflow.
+      All data columns are text. One partition per day (dt).
+    schema: raw
+    tables:
+      - name: bcb_sgs
+        description: >
+          Daily indicators from the Banco Central do Brasil SGS API (real public data).
+          One row per series per day. Days without data (weekends, holidays) have no rows.
+        columns:
+          - name: series_name
+            description: Series name (selic, cdi or usd_brl_ptax).
+          - name: reference_date
+            description: Date of the value, as sent by the API (dd/MM/yyyy). API field "data".
+          - name: value
+            description: Value of the series, as sent by the API. API field "valor".
+          - name: dt
+            description: Processing day (bronze partition).
+          - name: source_file
+            description: Bronze object key the row came from.
+          - name: loaded_at
+            description: When the row was loaded into raw.
+
+      - name: transactions
+        description: >
+          SYNTHETIC payment transactions generated with Faker (fake data).
+          Contains duplicated rows and null values on purpose.
+        columns:
+          - name: transaction_id
+            description: Transaction identifier (UUID). Can be duplicated in raw.
+          - name: customer_cpf
+            description: CPF of the customer (fake). Personal data, can be null in raw.
+          - name: transaction_at
+            description: Date and time of the transaction (ISO 8601, Sao Paulo local time).
+          - name: payment_type
+            description: pix, boleto, credit_card or debit_card.
+          - name: channel
+            description: app, web or pos.
+          - name: amount
+            description: Transaction amount in BRL. Can be null in raw.
+          - name: fee
+            description: Fee charged in BRL.
+          - name: status
+            description: approved, declined or refunded.
+          - name: dt
+            description: Processing day (bronze partition).
+          - name: source_file
+            description: Bronze object key the row came from.
+          - name: loaded_at
+            description: When the row was loaded into raw.
+
+      - name: customers
+        description: >
+          SYNTHETIC customer registry generated with Faker (fake data).
+          A full snapshot is loaded every day.
+        columns:
+          - name: cpf
+            description: CPF (fake). Personal data.
+          - name: name
+            description: Customer name (fake). Personal data, not used after raw.
+          - name: email
+            description: Email (fake). Personal data.
+          - name: state
+            description: Brazilian state code (UF).
+          - name: city
+            description: City name.
+          - name: created_at
+            description: When the customer was created.
+          - name: segment
+            description: individual or business.
+          - name: dt
+            description: Snapshot day (bronze partition).
+          - name: source_file
+            description: Bronze object key the row came from.
+          - name: loaded_at
+            description: When the row was loaded into raw.
