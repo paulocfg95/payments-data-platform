@@ -14,3 +14,10 @@ select = ["E", "F", "W", "I", "B", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "integration: needs the warehouse from docker compose (skipped if it is not running)",
+]
+
+[tool.ruff.lint.isort]
+# Modules in airflow/dags are imported by name inside Airflow.
+known-first-party = ["src", "pipeline_assets", "raw_tasks"]

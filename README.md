@@ -10,18 +10,23 @@ into a PostgreSQL warehouse and model it with dbt as a star schema. Everything r
 `docker compose up`.
 
 **Status:** Phase 1 done (infrastructure + BCB ingestion to bronze). Phase 2 in progress:
-synthetic transaction generator done. See [Roadmap](#roadmap).
+synthetic transaction generator and bronze → raw load done. See [Roadmap](#roadmap).
 
 ## Architecture
 
 ```
-Banco Central SGS API ──> Airflow (ingest_bcb) ────────────┐
-                                                            ├─> bronze (MinIO / S3)
-Faker generator ───────> Airflow (generate_transactions) ───┘   bronze/<source>/dt=YYYY-MM-DD/<file>.json
-                                                         │
-                                      (phase 2)          v
-                                          PostgreSQL raw ─> dbt staging (silver) ─> dbt marts (gold)
+Banco Central SGS API ──> ingest_bcb ────────────┐
+                                                  ├─> bronze (MinIO / S3) ─> raw (PostgreSQL)
+Faker generator ───────> generate_transactions ───┘   JSON files by day       text tables by day
+                                                                                    │
+                                                                                    │ Airflow Assets
+                                                                    (next)          v
+                                                  dbt staging (silver) ─> dbt marts (gold, star schema)
 ```
+
+Each ingestion DAG does three steps per file: **write to bronze → load into raw → check the
+row count**. When the check passes, the DAG marks an Airflow Asset (`raw_bcb_sgs`,
+`raw_customers`, `raw_transactions`) as updated. The dbt DAG will run when these assets change.
 
 ## Tech stack
 
@@ -30,7 +35,8 @@ Faker generator ───────> Airflow (generate_transactions) ───
 | Python 3.12 | Extraction code in small, testable modules |
 | Apache Airflow 3.3 | Daily scheduling, retries, backfill |
 | MinIO (local S3) | Bronze layer with the same API as Amazon S3. The code uses boto3, so switching to S3 only changes env vars |
-| PostgreSQL 16 | Data warehouse (phase 2) and Airflow metadata |
+| PostgreSQL 16 | Data warehouse (raw schema now, dbt models next) and Airflow metadata |
+| psycopg2 | Fast batch inserts into PostgreSQL (`execute_values`) |
 | pytest, responses, moto | Unit tests without network or real cloud |
 | ruff | Python lint and format |
 | Docker Compose | One command to start everything |
@@ -57,6 +63,18 @@ Synthetic payments (fake data, generated with Faker `pt_BR`):
 About 1% of the transactions are duplicated and about 0.5% have a null `customer_cpf` or
 `amount`, on purpose. The silver layer cleans them and the data tests check the result.
 
+## Raw layer (PostgreSQL)
+
+| Table | Partition (what a re-run replaces) |
+|---|---|
+| `raw.bcb_sgs` | one day and one series |
+| `raw.transactions` | one day |
+| `raw.customers` | one day (full snapshot of the registry) |
+
+Data columns are `text`, a faithful copy of the bronze file. Types are set later in dbt.
+The BCB fields `data` and `valor` get English names (`reference_date`, `value`); the values
+do not change. Every table also has `dt`, `source_file` (the bronze key) and `loaded_at`.
+
 ## Dimensional model
 
 Planned for phase 2. The main fact table, `fact_transactions`, will have **one row per transaction**.
@@ -82,7 +100,11 @@ docker compose up -d --build
 
 Ports can be changed in `.env` (`AIRFLOW_PORT`, `WAREHOUSE_PORT`).
 
-The `ingest_bcb` DAG runs every day at 10:00 (São Paulo time) for the previous day.
+| DAG | Schedule (São Paulo time) | Processes |
+|---|---|---|
+| `ingest_bcb` | every day at 10:00 | the previous day |
+| `generate_transactions` | every day at 02:00 | the previous day |
+
 To load past days (backfill):
 
 ```bash
@@ -92,7 +114,14 @@ docker compose exec airflow-scheduler \
 
 This creates one run per day from 2026-11-02 to 2026-11-06. Airflow only creates a run when
 the whole day is inside the range, so `--to-date` itself is not processed.
-The files appear in the `datalake` bucket under `bronze/bcb_sgs/dt=YYYY-MM-DD/`.
+Add `--reprocess-behavior completed` to run again days that already ran.
+
+Check the result in the warehouse:
+
+```bash
+docker compose exec warehouse psql -U warehouse -d warehouse \
+  -c "SELECT dt, count(*) FROM raw.transactions GROUP BY dt ORDER BY dt;"
+```
 
 ### Tests and lint
 
@@ -104,16 +133,25 @@ ruff check .
 pytest
 ```
 
+Tests marked `integration` use the warehouse from Docker Compose (schema `raw_test`, dropped
+after each test). If the warehouse is not running, they are skipped. To run only unit tests:
+`pytest -m "not integration"`.
+
 ## Technical decisions
 
 - **ELT.** Raw data is saved first, as it came from the source. Transformation happens later in dbt.
 - **Idempotency.** The day to process comes from the Airflow data interval, never from the clock.
   Each run writes to a fixed key (`dt=<day>/<series>.json`), so a re-run replaces the file.
-  No duplicates.
+  In raw, the loader runs `DELETE` of the partition and `INSERT` of the new rows in one
+  database transaction. A re-run gives the same rows, never duplicates.
+- **Row count check.** After each load, the number of rows in raw must match the bronze file.
+  If not, the task fails and the Asset is not updated, so dbt does not run on bad data.
+- **Raw as text.** The raw layer does not convert types, so a bad value never breaks the load.
+  Cleaning and typing are the job of the silver layer (dbt).
 - **Deterministic generator.** The random seed is the processing date (`20261105`), so the
   same day always produces the same transactions. A golden test checks that the output is
   identical on every machine (laptop, Airflow container, CI).
-- **Empty days.** On weekends and holidays the API returns HTTP 404. The client treats this as
+- **Empty days.** On weekends and holidays (for example 2026-11-02) the API returns HTTP 404. The client treats this as
   "no data" and writes an empty list, so we can see the day was processed.
 - **Failure handling.** HTTP timeouts, retries with exponential backoff on network errors,
   HTTP 429 and 5xx, response schema validation, and logs. Airflow also retries the task.
@@ -142,7 +180,7 @@ No real personal data is used. BCB indicators are real public data.
 airflow/dags/        Airflow DAGs
 src/extract/         BCB API client and ingestion job
 src/generate/        Synthetic customer and transaction generator
-src/load/            Bronze writer (S3 / MinIO)
+src/load/            Bronze writer (S3 / MinIO) and raw loader (PostgreSQL)
 tests/               pytest
 docker/airflow/      Airflow image
 docker-compose.yml
